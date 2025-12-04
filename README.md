@@ -108,5 +108,4 @@ The notebook exposes these through a single configuration dictionary so you can 
 2. Run the provided sanity-check evaluation prompts to verify the model behaves as expected.
 3. Upload adapters to a private Hugging Face repo for deployment in an inference stack (Text Generation Inference, vLLM, or Modal).
 
-For inspiration, compare this guide with the earlier Polo Club tutorial, which focuses on a single wildfire dataset but lacks extensibility features ([poloclub/Fine-tuning-LLMs on GitHub](https://github.com/poloclub/Fine-tuning-LLMs)). This project generalizes the workflow while remaining free to run on Colab-class hardware.
 
