@@ -1,112 +1,249 @@
-## Colab QLoRA Fine-Tuning Toolkit
+# LoRA & QLoRA Fine-Tuning Toolkit
 
-This repo provides a fully documented, Colab-ready workflow for fine-tuning open-source chat models such as `meta-llama/Llama-2-7b-chat-hf` using QLoRA on private text data. It expands upon the original Polo Club tutorial by adding richer explanations, guardrails, and extensibility tips so you can adapt it to new domains or larger models without guesswork.
-
-### What's inside
-
-- `notebooks/colab_qlora_finetune.ipynb` — the main Colab notebook that automates data prep, QLoRA training, evaluation, and export.
-- `notebooks/colab_lora_finetune.ipynb` — a full-precision LoRA workflow for users who prefer standard mixed-precision training without bitsandbytes.
-- `README.md` (this file) — deep-dives on prerequisites, how to customize the notebook, and troubleshooting tips.
-
-If you just want to run the pipeline, open the notebook directly in Colab (File ▸ Open Notebook ▸ GitHub) or use:
-
-```
-https://colab.research.google.com/github/<your-org-or-username>/Auto-RL/blob/main/notebooks/colab_qlora_finetune.ipynb
-```
-
-Replace `<your-org-or-username>` with the account that hosts this repository.
+This repo provides fully documented, Colab-ready workflows for fine-tuning open-source chat models such as `meta-llama/Llama-2-7b-chat-hf` using **LoRA** (Low-Rank Adaptation) and **QLoRA** (Quantized LoRA). Both notebooks include comprehensive theory explanations, practical code, and deployment guidance.
 
 ---
 
-## 1. Prerequisites
+## 📓 What's Inside
+
+| Notebook | Description | GPU Memory Needed |
+|----------|-------------|-------------------|
+| [`colab_lora_finetune.ipynb`](notebooks/colab_lora_finetune.ipynb) | Full-precision LoRA training (bf16/fp16) | ~15 GB (7B model) |
+| [`colab_qlora_finetune.ipynb`](notebooks/colab_qlora_finetune.ipynb) | 4-bit quantized QLoRA training | ~6 GB (7B model) |
+
+Both notebooks include:
+- 📚 **Detailed theory explanations** with mathematical formulas
+- 🔧 **Step-by-step code** with inline documentation
+- 📊 **Visual diagrams** explaining the architecture
+- 🚀 **Deployment guidance** for production use
+
+---
+
+## 🧠 LoRA vs QLoRA: Which Should I Use?
+
+| Aspect | LoRA | QLoRA |
+|--------|------|-------|
+| **Base model precision** | FP16/BF16 (16-bit) | NF4 (4-bit) |
+| **Memory for 7B model** | ~15 GB | ~6 GB |
+| **Training speed** | Faster | Slightly slower |
+| **Quality** | Reference | ~99% of LoRA |
+| **Colab compatibility** | Pro recommended | Works on free T4 |
+
+### Choose **LoRA** when:
+- You have ≥24GB VRAM available
+- Maximum quality is critical
+- Faster training is preferred
+- Simpler setup is desired
+
+### Choose **QLoRA** when:
+- Limited GPU memory (<16GB)
+- Using free Google Colab (T4)
+- Training larger models (13B+)
+- Memory efficiency is priority
+
+---
+
+## 🚀 Quick Start
+
+### Open in Colab
+
+**QLoRA (recommended for free Colab):**
+```
+https://colab.research.google.com/github/<your-username>/Auto-RL/blob/main/notebooks/colab_qlora_finetune.ipynb
+```
+
+**LoRA (for Colab Pro or local GPUs):**
+```
+https://colab.research.google.com/github/<your-username>/Auto-RL/blob/main/notebooks/colab_lora_finetune.ipynb
+```
+
+Replace `<your-username>` with the account hosting this repository.
+
+---
+
+## 📋 Prerequisites
 
 | Requirement | Purpose | Notes |
 |-------------|---------|-------|
-| Google account with Colab access | Compute | Works with the free T4 runtime (16 GB). Pro/Pro+ lets you select L4/A100 for faster runs. |
-| Hugging Face account | Model + token | Request access to `meta-llama/Llama-2-7b-chat-hf` (or the model you plan to fine-tune). Generate a User Access Token with *read* access. |
-| Private dataset in plain text | Training data | One document per `.txt` file is easiest. The notebook includes a helper to build JSON/Parquet datasets if needed. |
-| ~12 GB Google Drive space | Outputs | Stores the LoRA adapters and tokenizer snapshots. Delete old runs or export to Hugging Face Hub once finished. |
+| Google account with Colab access | Compute | Free T4 works for QLoRA; Pro/Pro+ recommended for LoRA |
+| Hugging Face account | Model access | Request access to gated models (e.g., Llama-2) and generate an access token |
+| Training data | Fine-tuning | Text files, JSON, or Hugging Face datasets |
+| ~12 GB Google Drive space | Outputs | Stores adapters and checkpoints |
 
 ---
 
-## 2. How the notebook is structured
+## 📖 Theory Overview
 
-1. **Environment bootstrap**
-   - Installs pinned versions of `transformers`, `peft`, `trl`, `bitsandbytes`, and `accelerate`.
-   - Validates GPU availability and bnb (4-bit) compatibility.
-2. **Data ingestion + cleaning**
-   - Accepts either: (a) text files uploaded to Colab, (b) a Google Drive folder, or (c) a Hugging Face dataset name.
-   - Normalizes whitespace, removes boilerplate, and optionally chunks long passages.
-3. **Prompt templating**
-   - Implements system/instruction/response formatting derived from the chat template exposed by the tokenizer config (no hard-coded strings).
-   - Supports multi-turn JSON transcripts if available.
-4. **QLoRA training**
-   - Loads base model in 4-bit NF4, freezes the base, and attaches LoRA adapters to attention and MLP modules.
-   - Uses `trl.SFTTrainer` so you only need to configure Trainer arguments.
-5. **Evaluation + smoke tests**
-   - Computes perplexity on a held-out slice and runs a few interactive inference prompts.
-6. **Export + deployment**
-   - Saves adapters locally, merges (optional) for full-precision export, and can upload to the Hugging Face Hub or your Drive.
+### What is LoRA?
 
-Each section has collapsible "Why this matters" callouts to explain trade-offs and default values.
+**LoRA (Low-Rank Adaptation)** is a parameter-efficient fine-tuning technique that:
 
----
+1. **Freezes** the pre-trained model weights
+2. **Injects** small trainable matrices into each layer
+3. **Trains** only ~0.1% of parameters while achieving near full fine-tuning quality
 
-## 3. Customizing the workflow
+**The key insight:** Weight updates during fine-tuning have low intrinsic rank, so we can decompose:
 
-### 3.1 Selecting models
+$$W_{new} = W_{frozen} + \frac{\alpha}{r} \cdot B \cdot A$$
 
-- Swap `model_name` in the configuration cell for any causal decoder with chat capabilities (e.g., `mistralai/Mistral-7B-Instruct-v0.2`).
-- Adjust `target_modules` to match the architecture (the notebook provides maps for LLaMA, Mistral, Phi-2, etc.).
-- Larger models (13B/70B) need Colab Pro+ or Gradient/AWS for more VRAM; otherwise stay with 7B.
+Where $A$ and $B$ are small matrices with rank $r \ll d$.
 
-### 3.2 Data format tips
+### What is QLoRA?
 
-| Scenario | Recommended Format | Validation |
-|----------|-------------------|-----------|
-| Simple Q&A | CSV with `instruction` / `response` columns | The notebook auto-splits into prompt/answer pairs. |
-| Multi-turn chat | JSON Lines, one object per conversation | Provide `system`, `messages` array, and `role` fields. |
-| Long documents | Plain text files | Enable the `smart_chunking` flag to break into ~1k token chunks. |
+**QLoRA** combines LoRA with 4-bit quantization:
 
-Use the provided `inspect_dataset()` helper to preview random rows before training.
+1. **Quantizes** the base model to 4-bit NF4 format (75% memory savings)
+2. **Applies** LoRA adapters in full precision (bf16)
+3. **Dequantizes** on-the-fly during forward pass
 
-### 3.3 Hyperparameters worth tuning
-
-| Setting | Default | When to change |
-|---------|---------|----------------|
-| `lr` | `2e-4` | Lower to `1e-4` for noisier data, increase slightly for tiny datasets. |
-| `micro_batch_size` | `4` (tokens: 2k) | Reduce if you hit OOM; gradient accumulation keeps global batch size stable. |
-| `lora_alpha` | `16` | Increase to `32` for higher-rank adapters or more aggressive updates. |
-| `warmup_ratio` | `0.03` | Set to `0.1` when training for fewer than 3 epochs. |
-
-The notebook exposes these through a single configuration dictionary so you can keep experiment logs consistent.
+This enables fine-tuning a **7B model on just 6GB VRAM**!
 
 ---
 
-## 4. Validation and safety recommendations
+## 🏗️ Notebook Structure
 
-1. **Hold-out set** – Reserve at least 5% of your data to compute perplexity and spot overfitting.
-2. **Behavior audit** – Use the included evaluation prompts plus your domain-specific checks (toxicity, bias, leakage).
-3. **System prompt locking** – Provide a clear system message describing on/off-topic guidance; update it alongside your data.
-4. **Versioning** – Tag each run with a semantic version (`v1.0.0-private-law-firm`) and save config snapshots to Drive or DVC.
+Both notebooks follow the same structure:
+
+### 1. Environment Setup
+- Install pinned dependencies (`transformers`, `peft`, `trl`, etc.)
+- Validate GPU availability
+- Authenticate with Hugging Face
+
+### 2. Data Ingestion
+- Load from text files, Google Drive, or Hugging Face datasets
+- Normalize and chunk long documents
+- Convert to instruction/response format
+
+### 3. Prompt Templating
+- Use model's native chat template
+- Format system/user/assistant messages correctly
+
+### 4. Training
+- Load base model (fp16 for LoRA, 4-bit for QLoRA)
+- Attach LoRA adapters to target modules
+- Fine-tune with `SFTTrainer`
+
+### 5. Evaluation
+- Compute perplexity on held-out data
+- Interactive chat testing
+
+### 6. Export & Deployment
+- Save adapters separately or merge into base model
+- Optional upload to Hugging Face Hub
 
 ---
 
-## 5. Troubleshooting quick reference
+## ⚙️ Configuration Guide
 
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| `CUDA out of memory` even at batch size 1 | Colab assigned a K80 (no 4-bit) | Rerun runtime allocation or switch to Colab Pro to force T4/L4. |
-| `RuntimeError: mat1 and mat2 shapes cannot be multiplied` | Dataset produced empty outputs | Use `validate_rows=True` to drop incomplete prompt/response pairs. |
-| Training freezes around step 0 | BitsAndBytes not initialized | Re-run the setup cell to install `bitsandbytes==0.43.0` before importing `AutoModel`. |
-| Adapters fail to merge | Incompatible base model | Ensure `base_model` string matches the checkpoint used during training before calling `merge_and_unload()`. |
+### Key Hyperparameters
+
+| Parameter | LoRA Default | QLoRA Default | Description |
+|-----------|--------------|---------------|-------------|
+| `lora_r` | 16 | 64 | Rank of LoRA matrices (higher = more capacity) |
+| `lora_alpha` | 32 | 16 | Scaling factor (effective scale = alpha/r) |
+| `lora_dropout` | 0.05 | 0.1 | Dropout for regularization |
+| `learning_rate` | 1e-4 | 2e-4 | Learning rate |
+| `micro_batch_size` | 1 | 4 | Batch size per GPU |
+| `gradient_accumulation_steps` | 8 | 4 | Steps to accumulate |
+| `cutoff_len` | 2048 | 2048 | Maximum sequence length |
+
+### Why Different Defaults?
+
+- **QLoRA uses higher `lora_r`** (64 vs 16): Compensates for information loss from 4-bit quantization
+- **QLoRA uses larger batches** (4 vs 1): Less memory used by base model allows bigger batches
+- **QLoRA uses slightly higher LR**: Works well with the quantized setup
+
+### Target Modules
+
+For Llama/Mistral architectures:
+```python
+target_modules = [
+    "q_proj", "k_proj", "v_proj", "o_proj",  # Attention
+    "gate_proj", "up_proj", "down_proj"       # MLP
+]
+```
 
 ---
 
-## 6. Next steps
+## 📊 Data Format
 
-1. Duplicate the notebook and adjust the config for your data.
-2. Run the provided sanity-check evaluation prompts to verify the model behaves as expected.
-3. Upload adapters to a private Hugging Face repo for deployment in an inference stack (Text Generation Inference, vLLM, or Modal).
+### Supported Formats
 
+| Format | Example | Use Case |
+|--------|---------|----------|
+| Text files | `.txt` files in a folder | Documents, articles |
+| Hugging Face dataset | `tatsu-lab/alpaca` | Pre-formatted instruction data |
+| JSON/JSONL | `{"instruction": "...", "response": "..."}` | Custom instruction pairs |
 
+### Required Fields
+
+```json
+{
+  "instruction": "Explain quantum computing",
+  "response": "Quantum computing uses quantum mechanics...",
+  "system": "You are a helpful science tutor."
+}
+```
+
+---
+
+## 🔧 Troubleshooting
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `CUDA out of memory` | Insufficient VRAM | Reduce `micro_batch_size` or `cutoff_len` |
+| Loss not decreasing | LR too low or data issues | Increase `learning_rate`, check data quality |
+| Poor generation quality | Wrong prompt template | Ensure template matches training format |
+| `bitsandbytes` errors | Missing CUDA support | Re-run setup cell, ensure GPU runtime |
+| Training freezes | BitsAndBytes initialization | Install `bitsandbytes` before importing models |
+
+---
+
+## 🚀 Deployment Options
+
+### Option 1: Keep Adapters Separate
+```python
+from peft import PeftModel
+model = AutoModelForCausalLM.from_pretrained("base-model")
+model = PeftModel.from_pretrained(model, "path/to/adapter")
+```
+- ✅ Hot-swap different adapters
+- ✅ Smaller storage per task
+- ❌ Requires PEFT at inference
+
+### Option 2: Merge and Export
+```python
+merged = model.merge_and_unload()
+merged.save_pretrained("merged-model")
+```
+- ✅ Standard model format
+- ✅ No PEFT dependency
+- ❌ Larger storage
+
+### Production Frameworks
+
+| Framework | LoRA Support | Best For |
+|-----------|--------------|----------|
+| vLLM | ✅ Native | High-throughput serving |
+| TGI | ✅ Native | Production APIs |
+| Ollama | Merge first | Local development |
+| llama.cpp | Merge + GGUF | Edge/CPU deployment |
+
+---
+
+## 📚 Further Reading
+
+- [LoRA Paper](https://arxiv.org/abs/2106.09685) - Original research by Microsoft
+- [QLoRA Paper](https://arxiv.org/abs/2305.14314) - Quantized fine-tuning research
+- [PEFT Documentation](https://huggingface.co/docs/peft) - Hugging Face implementation
+- [TRL Documentation](https://huggingface.co/docs/trl) - Training library details
+
+---
+
+## 📝 License
+
+This project is provided for educational purposes. Please ensure compliance with the licenses of any models you fine-tune (e.g., Llama 2 Community License).
+
+---
+
+*Happy fine-tuning! 🚀*
